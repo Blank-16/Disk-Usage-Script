@@ -9,7 +9,7 @@ Python 3.10+, no external dependencies.
 ## Usage
 
 ```
-python scanner.py [--drives DRIVE ...] [--top N] [--quiet]
+python script.py [--drives DRIVE ...] [--top N] [--quiet]
 ```
 
 ## Options
@@ -24,13 +24,13 @@ python scanner.py [--drives DRIVE ...] [--top N] [--quiet]
 
 ```bash
 # Scan default drives, show top 20
-python scanner.py
+python script.py
 
 # Scan a single drive, show top 10
-python scanner.py --drives C:\ --top 10
+python script.py --drives C:\ --top 10
 
 # Pipe output to a file
-python scanner.py --quiet > results.txt
+python script.py --quiet > results.txt
 ```
 
 ## Notes
