@@ -8,7 +8,6 @@ mod scanner;
 mod tests;
 mod types;
 mod ui;
-mod web_ui;
 
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -25,7 +24,6 @@ use ui::{
     print_duplicates_table, print_extensions_table, print_junk_table, print_results_table,
     print_size_histogram,
 };
-use web_ui::start_gui_server;
 
 fn main() {
     std::panic::set_hook(Box::new(|info| {
@@ -44,11 +42,6 @@ fn main() {
         }
     };
 
-    if args.gui {
-        start_gui_server(args);
-        return;
-    }
-
     let raw_args: Vec<String> = std::env::args().collect();
     let mut args = args;
     if raw_args.len() == 1 && std::io::stdin().is_terminal() {
@@ -62,12 +55,11 @@ fn main() {
         println!("Select scan mode:");
         println!("  [1] Default Scan (Scan main drives with recommended settings)");
         println!("  [2] Advance Options (Configure custom drives, filters, depth, and junk)");
-        println!("  [3] Open UI Window (Launch standalone dark-mode desktop window)");
-        println!("  [4] Exit");
+        println!("  [3] Exit");
         println!(
             "--------------------------------------------------------------------------------"
         );
-        print!("Select [1-4] (default: 1) > ");
+        print!("Select [1-3] (default: 1) > ");
         std::io::stdout().flush().ok();
 
         let mut input = String::new();
@@ -111,10 +103,7 @@ fn main() {
             if hist_input.trim().eq_ignore_ascii_case("y") {
                 args.size_histogram = true;
             }
-        } else if choice == "3" {
-            start_gui_server(args);
-            return;
-        } else if choice == "4"
+        } else if choice == "3"
             || choice.eq_ignore_ascii_case("q")
             || choice.eq_ignore_ascii_case("exit")
         {

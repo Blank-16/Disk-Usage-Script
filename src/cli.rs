@@ -63,7 +63,6 @@ pub fn print_help() {
     println!(
         "  --interactive-clean      Interactively select and delete files from largest files list"
     );
-    println!("  --gui                    Launch minimal dark-mode monospace UI window in browser");
     println!("  --json <FILE>            Export scan results to JSON file");
     println!("  --csv <FILE>             Export scan results to CSV file");
     println!("  --html <FILE>            Export interactive HTML visual treemap report");
@@ -100,7 +99,6 @@ pub fn parse_args() -> Result<Args, String> {
     let mut size_histogram = false;
     let mut filter_pattern = None;
     let mut dedupe_hardlink = false;
-    let mut gui = false;
 
     let mut i = 0;
     while i < raw.len() {
@@ -222,9 +220,6 @@ pub fn parse_args() -> Result<Args, String> {
             "--interactive-clean" => {
                 interactive_clean = true;
             }
-            "--gui" => {
-                gui = true;
-            }
             "--no-color" => {
                 no_color = true;
             }
@@ -301,6 +296,5 @@ pub fn parse_args() -> Result<Args, String> {
         size_histogram,
         filter_pattern,
         dedupe_hardlink,
-        gui,
     })
 }

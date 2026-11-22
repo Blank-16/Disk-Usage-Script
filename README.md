@@ -69,7 +69,6 @@ disk-usage-scanner.exe --drives C:\ D:\ --top 10
 | `--snapshot FILE` | none | Save current scan snapshot to file |
 | `--diff FILE` | none | Compare current scan against an earlier snapshot |
 | `--interactive-clean` | off | Interactively select and delete large files |
-| `--gui` | off | Launch minimal dark-mode monospace UI window in browser |
 | `--json FILE` | none | Export scan results to a JSON file |
 | `--csv FILE` | none | Export scan results to a CSV file |
 | `--html FILE` | none | Export an interactive HTML treemap report |

@@ -60,5 +60,4 @@ pub struct Args {
     pub size_histogram: bool,
     pub filter_pattern: Option<String>,
     pub dedupe_hardlink: bool,
-    pub gui: bool,
 }
