@@ -1,5 +1,9 @@
 # Disk Usage Scanner
 
+<p align="center">
+  <img src="assets/cat.png" alt="Disk Usage Scanner Cat Logo" width="128" height="128" />
+</p>
+
 Fast multi-threaded disk usage scanner for Unix (Linux, macOS) and Windows. Traverses drives concurrently to find the largest files and folders.
 
 Written in Rust for optimal performance with zero external dependencies, alongside the original Python version.
