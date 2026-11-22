@@ -1,0 +1,14 @@
+[package]
+name = "disk-usage-scanner"
+version = "1.0.0"
+edition = "2021"
+authors = ["Blank-16"]
+description = "High-performance multi-threaded disk usage scanner for Unix and Windows"
+license = "MIT"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

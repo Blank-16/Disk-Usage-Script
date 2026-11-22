@@ -1,0 +1,139 @@
+name: Build and Release Executables
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Linux Binary
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build static release binary
+        run: cargo build --release --target x86_64-unknown-linux-musl
+
+      - name: Package Linux binary
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/disk-usage-scanner dist/disk-usage-scanner-linux-x86_64
+          chmod +x dist/disk-usage-scanner-linux-x86_64
+          cd dist
+          tar -czf disk-usage-scanner-linux-x86_64.tar.gz disk-usage-scanner-linux-x86_64
+
+      - name: Upload Linux executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: disk-usage-scanner-linux-x86_64
+          path: |
+            dist/disk-usage-scanner-linux-x86_64
+            dist/disk-usage-scanner-linux-x86_64.tar.gz
+
+  build-windows:
+    name: Build Windows Binary
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Package Windows binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target/x86_64-pc-windows-msvc/release/disk-usage-scanner.exe dist/disk-usage-scanner-windows-x86_64.exe
+          Compress-Archive -Path dist/disk-usage-scanner-windows-x86_64.exe -DestinationPath dist/disk-usage-scanner-windows-x86_64.zip
+
+      - name: Upload Windows executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: disk-usage-scanner-windows-x86_64
+          path: |
+            dist/disk-usage-scanner-windows-x86_64.exe
+            dist/disk-usage-scanner-windows-x86_64.zip
+
+  build-macos:
+    name: Build macOS Universal Binary
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin, aarch64-apple-darwin
+
+      - name: Build release binaries
+        run: |
+          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+
+      - name: Create universal binary
+        run: |
+          mkdir -p dist
+          lipo -create -output dist/disk-usage-scanner-macos \
+            target/x86_64-apple-darwin/release/disk-usage-scanner \
+            target/aarch64-apple-darwin/release/disk-usage-scanner
+          chmod +x dist/disk-usage-scanner-macos
+          cd dist
+          tar -czf disk-usage-scanner-macos-universal.tar.gz disk-usage-scanner-macos
+
+      - name: Upload macOS executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: disk-usage-scanner-macos-universal
+          path: |
+            dist/disk-usage-scanner-macos
+            dist/disk-usage-scanner-macos-universal.tar.gz
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+
+      - name: Consolidate release assets
+        run: |
+          mkdir -p release-assets
+          find downloaded-artifacts -type f -exec cp {} release-assets/ \;
+          ls -la release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
