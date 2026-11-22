@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -16,7 +16,6 @@ const COLOR_DIM: &str = "\x1b[2m";
 
 const DEFAULT_RESULTS_TO_SHOW: usize = 20;
 const MINIMUM_FOLDER_SIZE_BYTES: u64 = 1024 * 1024;
-const MAX_RECENT_PATHS: usize = 10;
 const SEPARATOR_WIDTH: usize = 80;
 
 #[cfg(windows)]
@@ -98,15 +97,19 @@ fn print_results_table(table_title: &str, rows: &[(u64, PathBuf)]) {
         COLOR_GREEN, "SIZE", COLOR_RESET, COLOR_YELLOW, table_title, COLOR_RESET
     );
     println!("{}{}{}", COLOR_YELLOW, separator, COLOR_RESET);
-    for (bytes, path) in rows {
-        let size_str = bytes_to_readable_size(*bytes);
-        println!(
-            "{}{: <12}{} | {}",
-            COLOR_GREEN,
-            size_str,
-            COLOR_RESET,
-            path.display()
-        );
+    if rows.is_empty() {
+        println!("  (No items found)");
+    } else {
+        for (bytes, path) in rows {
+            let size_str = bytes_to_readable_size(*bytes);
+            println!(
+                "{}{: <12}{} | {}",
+                COLOR_GREEN,
+                size_str,
+                COLOR_RESET,
+                path.display()
+            );
+        }
     }
 }
 
@@ -257,7 +260,7 @@ fn parse_args() -> Result<Args, String> {
     })
 }
 
-fn merge_heaps(
+fn merge_file_heaps(
     all_heaps: Vec<BinaryHeap<Reverse<(u64, PathBuf)>>>,
     top_n: usize,
 ) -> Vec<(u64, PathBuf)> {
@@ -275,6 +278,59 @@ fn merge_heaps(
         }
     }
     let mut vec: Vec<(u64, PathBuf)> = combined.into_iter().map(|Reverse(x)| x).collect();
+    vec.sort_by_key(|a| Reverse(a.0));
+    vec
+}
+
+fn compute_largest_folders(
+    dir_sizes: HashMap<PathBuf, u64>,
+    drive_roots: &[PathBuf],
+    top_n: usize,
+    min_size: u64,
+) -> Vec<(u64, PathBuf)> {
+    let mut recursive_sizes = dir_sizes.clone();
+    let mut paths: Vec<PathBuf> = dir_sizes.keys().cloned().collect();
+
+    paths.sort_by_key(|p| Reverse(p.components().count()));
+
+    for p in paths {
+        let size = *recursive_sizes.get(&p).unwrap_or(&0);
+        if size > 0 {
+            if let Some(parent) = p.parent() {
+                let is_root = drive_roots.iter().any(|r| r.as_path() == p.as_path());
+                if !is_root {
+                    if let Some(psize) = recursive_sizes.get_mut(parent) {
+                        *psize += size;
+                    } else {
+                        recursive_sizes.insert(parent.to_path_buf(), size);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut top_heap: BinaryHeap<Reverse<(u64, PathBuf)>> = BinaryHeap::with_capacity(top_n + 1);
+
+    for (path, size) in recursive_sizes {
+        if size < min_size {
+            continue;
+        }
+
+        if drive_roots.iter().any(|r| r.as_path() == path.as_path()) {
+            continue;
+        }
+
+        if top_heap.len() < top_n {
+            top_heap.push(Reverse((size, path)));
+        } else if let Some(min) = top_heap.peek() {
+            if size > min.0 .0 {
+                top_heap.pop();
+                top_heap.push(Reverse((size, path)));
+            }
+        }
+    }
+
+    let mut vec: Vec<(u64, PathBuf)> = top_heap.into_iter().map(|Reverse(x)| x).collect();
     vec.sort_by_key(|a| Reverse(a.0));
     vec
 }
@@ -319,10 +375,10 @@ fn main() {
 
     let scan_start_time = Instant::now();
     let total_files = Arc::new(AtomicU64::new(0));
-    let recent_tracker = Arc::new(Mutex::new(VecDeque::new()));
+    let last_scanned_path = Arc::new(Mutex::new(String::new()));
 
     let mut all_file_heaps = Vec::new();
-    let mut all_folder_heaps = Vec::new();
+    let mut all_dir_sizes: HashMap<PathBuf, u64> = HashMap::new();
 
     for drive_path in &valid_drives {
         println!(
@@ -344,54 +400,40 @@ fn main() {
         let is_running = Arc::new(AtomicBool::new(true));
         let is_running_clone = Arc::clone(&is_running);
         let total_files_clone = Arc::clone(&total_files);
-        let recent_clone = Arc::clone(&recent_tracker);
+        let last_path_clone = Arc::clone(&last_scanned_path);
 
         let progress_handle = if is_interactive {
             Some(thread::spawn(move || {
-                let mut first = true;
                 while is_running_clone.load(Ordering::Relaxed) {
                     thread::sleep(std::time::Duration::from_millis(50));
                     let count = total_files_clone.load(Ordering::Relaxed);
                     let elapsed = scan_start_time.elapsed().as_secs_f64();
-                    let recent: Vec<String> =
-                        recent_clone.lock().unwrap().iter().cloned().collect();
+                    let current_path = {
+                        let lock = last_path_clone.lock().unwrap();
+                        lock.clone()
+                    };
 
-                    if !first {
-                        print!("\x1b[{}A\x1b[J", MAX_RECENT_PATHS + 2);
-                    }
-                    first = false;
+                    let truncated = if current_path.chars().count() > 45 {
+                        let t: String = current_path.chars().take(45).collect();
+                        format!("{}...", t)
+                    } else {
+                        current_path
+                    };
 
-                    println!(
-                        "{}[{:6.1}s | {} files scanned]{}",
+                    print!(
+                        "\r\x1b[K{}[{:>5.1}s | {:>7} files]{} {}{}{}",
                         COLOR_CYAN,
                         elapsed,
                         format_number(count),
-                        COLOR_RESET
-                    );
-                    println!(
-                        "{}Recently scanned (last {}):{}",
+                        COLOR_RESET,
                         COLOR_DIM,
-                        recent.len(),
+                        truncated,
                         COLOR_RESET
                     );
-                    for p in &recent {
-                        let truncated = if p.chars().count() > 75 {
-                            let t: String = p.chars().take(75).collect();
-                            format!("{}...", t)
-                        } else {
-                            p.to_string()
-                        };
-                        println!("{}* {}{}", COLOR_GREEN, COLOR_RESET, truncated);
-                    }
-                    for _ in 0..(MAX_RECENT_PATHS.saturating_sub(recent.len())) {
-                        println!();
-                    }
                     std::io::stdout().flush().ok();
                 }
-                if !first {
-                    print!("\x1b[{}A\x1b[J", MAX_RECENT_PATHS + 2);
-                    std::io::stdout().flush().ok();
-                }
+                print!("\r\x1b[K");
+                std::io::stdout().flush().ok();
             }))
         } else {
             None
@@ -401,23 +443,20 @@ fn main() {
         for _ in 0..args.threads {
             let pool = Arc::clone(&pool);
             let total_files = Arc::clone(&total_files);
-            let recent_tracker = Arc::clone(&recent_tracker);
+            let last_path = Arc::clone(&last_scanned_path);
             let top_n = args.top;
-            let min_folder_size = args.min_folder_size;
-            let track_recent = is_interactive;
 
             handles.push(thread::spawn(move || {
                 let mut local_files: BinaryHeap<Reverse<(u64, PathBuf)>> =
                     BinaryHeap::with_capacity(top_n + 1);
-                let mut local_folders: BinaryHeap<Reverse<(u64, PathBuf)>> =
-                    BinaryHeap::with_capacity(top_n + 1);
+                let mut local_dir_sizes: HashMap<PathBuf, u64> = HashMap::new();
 
                 loop {
                     let current_dir = {
                         let mut q = pool.queue.lock().unwrap();
                         loop {
                             if pool.shutdown.load(Ordering::Acquire) {
-                                return (local_files, local_folders);
+                                return (local_files, local_dir_sizes);
                             }
                             if let Some(path) = q.pop_front() {
                                 pool.active_workers.fetch_add(1, Ordering::SeqCst);
@@ -426,14 +465,14 @@ fn main() {
                             if pool.active_workers.load(Ordering::SeqCst) == 0 {
                                 pool.shutdown.store(true, Ordering::Release);
                                 pool.cv.notify_all();
-                                return (local_files, local_folders);
+                                return (local_files, local_dir_sizes);
                             }
                             q = pool.cv.wait(q).unwrap();
                         }
                     };
 
                     let mut new_subdirs = Vec::new();
-                    let mut folder_size: u64 = 0;
+                    let mut dir_file_size: u64 = 0;
 
                     if let Ok(entries) = std::fs::read_dir(&current_dir) {
                         for entry in entries.flatten() {
@@ -459,7 +498,7 @@ fn main() {
                                     continue;
                                 }
 
-                                folder_size += len;
+                                dir_file_size += len;
                                 total_files.fetch_add(1, Ordering::Relaxed);
 
                                 if local_files.len() < top_n {
@@ -471,28 +510,14 @@ fn main() {
                                     }
                                 }
 
-                                if track_recent {
-                                    if let Ok(mut lock) = recent_tracker.try_lock() {
-                                        if lock.len() >= MAX_RECENT_PATHS {
-                                            lock.pop_front();
-                                        }
-                                        lock.push_back(path.to_string_lossy().to_string());
-                                    }
+                                if let Ok(mut lock) = last_path.try_lock() {
+                                    *lock = path.to_string_lossy().to_string();
                                 }
                             }
                         }
                     }
 
-                    if folder_size >= min_folder_size {
-                        if local_folders.len() < top_n {
-                            local_folders.push(Reverse((folder_size, current_dir)));
-                        } else if let Some(min_top) = local_folders.peek() {
-                            if folder_size > min_top.0 .0 {
-                                local_folders.pop();
-                                local_folders.push(Reverse((folder_size, current_dir)));
-                            }
-                        }
-                    }
+                    local_dir_sizes.insert(current_dir, dir_file_size);
 
                     {
                         let mut q = pool.queue.lock().unwrap();
@@ -503,7 +528,7 @@ fn main() {
                         if prev == 1 && q.is_empty() {
                             pool.shutdown.store(true, Ordering::Release);
                             pool.cv.notify_all();
-                            return (local_files, local_folders);
+                            return (local_files, local_dir_sizes);
                         } else {
                             pool.cv.notify_all();
                         }
@@ -513,9 +538,11 @@ fn main() {
         }
 
         for h in handles {
-            let (files, folders) = h.join().unwrap();
+            let (files, dir_sizes) = h.join().unwrap();
             all_file_heaps.push(files);
-            all_folder_heaps.push(folders);
+            for (p, s) in dir_sizes {
+                *all_dir_sizes.entry(p).or_insert(0) += s;
+            }
         }
 
         is_running.store(false, Ordering::Relaxed);
@@ -536,8 +563,9 @@ fn main() {
         COLOR_RESET
     );
 
-    let largest_files = merge_heaps(all_file_heaps, args.top);
-    let largest_folders = merge_heaps(all_folder_heaps, args.top);
+    let largest_files = merge_file_heaps(all_file_heaps, args.top);
+    let largest_folders =
+        compute_largest_folders(all_dir_sizes, &valid_drives, args.top, args.min_folder_size);
 
     print_results_table(&format!("TOP {} LARGEST FILES", args.top), &largest_files);
     print_results_table(
