@@ -17,14 +17,7 @@ fn get_file_unique_id(meta: &std::fs::Metadata) -> Option<(u64, u64)> {
     Some((meta.dev(), meta.ino()))
 }
 
-#[cfg(windows)]
-fn get_file_unique_id(meta: &std::fs::Metadata) -> Option<(u64, u64)> {
-    use std::os::windows::fs::MetadataExt;
-    meta.file_index()
-        .map(|idx| (meta.volume_serial_number().unwrap_or(0) as u64, idx))
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn get_file_unique_id(_meta: &std::fs::Metadata) -> Option<(u64, u64)> {
     None
 }
