@@ -20,7 +20,7 @@ const MAX_RECENT_PATHS: usize = 10;
 const SEPARATOR_WIDTH: usize = 80;
 
 #[cfg(windows)]
-fn enable_ansi_support() {
+fn enable_ansi_support() -> bool {
     use std::os::raw::c_void;
     type Handle = *mut c_void;
     type Dword = u32;
@@ -37,15 +37,22 @@ fn enable_ansi_support() {
 
     unsafe {
         let handle = GetStdHandle(STD_OUTPUT_HANDLE);
+        if handle.is_null() || handle as isize == -1 {
+            return false;
+        }
         let mut mode: Dword = 0;
         if GetConsoleMode(handle, &mut mode) != 0 {
-            SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0
+        } else {
+            false
         }
     }
 }
 
 #[cfg(not(windows))]
-fn enable_ansi_support() {}
+fn enable_ansi_support() -> bool {
+    true
+}
 
 fn format_number(mut n: u64) -> String {
     if n == 0 {
@@ -116,6 +123,31 @@ struct Args {
     quiet: bool,
     threads: usize,
     min_folder_size: u64,
+    pause: bool,
+    no_pause: bool,
+}
+
+fn pause_before_exit(args: Option<&Args>) {
+    let should_pause = match args {
+        Some(a) if a.no_pause => false,
+        Some(a) if a.pause => true,
+        _ => {
+            #[cfg(windows)]
+            {
+                std::io::stdin().is_terminal()
+            }
+            #[cfg(not(windows))]
+            {
+                args.map(|a| a.pause).unwrap_or(false)
+            }
+        }
+    };
+
+    if should_pause {
+        println!("\nPress Enter to exit...");
+        let mut buf = String::new();
+        let _ = std::io::stdin().read_line(&mut buf);
+    }
 }
 
 fn print_help() {
@@ -128,6 +160,8 @@ fn print_help() {
     println!("  --quiet              Suppress live progress output");
     println!("  --threads <N>        Number of worker threads (default: CPU cores)");
     println!("  --min-size <BYTES>   Minimum folder size in bytes (default: 1048576)");
+    println!("  --pause              Prompt for Enter before closing");
+    println!("  --no-pause           Do not prompt for Enter before closing");
     println!("  -h, --help           Print help information");
 }
 
@@ -140,6 +174,8 @@ fn parse_args() -> Result<Args, String> {
         .map(|n| n.get())
         .unwrap_or(4);
     let mut min_folder_size = MINIMUM_FOLDER_SIZE_BYTES;
+    let mut pause = false;
+    let mut no_pause = false;
 
     let mut i = 0;
     while i < raw.len() {
@@ -185,6 +221,12 @@ fn parse_args() -> Result<Args, String> {
                     return Err("Missing argument for --min-size".to_string());
                 }
             }
+            "--pause" => {
+                pause = true;
+            }
+            "--no-pause" => {
+                no_pause = true;
+            }
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -210,6 +252,8 @@ fn parse_args() -> Result<Args, String> {
         quiet,
         threads: threads.max(1),
         min_folder_size,
+        pause,
+        no_pause,
     })
 }
 
@@ -236,17 +280,23 @@ fn merge_heaps(
 }
 
 fn main() {
-    enable_ansi_support();
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("\nUnexpected error occurred: {}", info);
+        pause_before_exit(None);
+    }));
+
+    let ansi_supported = enable_ansi_support();
 
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
             eprintln!("Error: {}", e);
+            pause_before_exit(None);
             std::process::exit(1);
         }
     };
 
-    let is_interactive = std::io::stdout().is_terminal() && !args.quiet;
+    let is_interactive = std::io::stdout().is_terminal() && !args.quiet && ansi_supported;
     let mut valid_drives = Vec::new();
 
     for drive in &args.drives {
@@ -263,6 +313,7 @@ fn main() {
 
     if valid_drives.is_empty() {
         println!("{}No valid drives to scan.{}", COLOR_RED, COLOR_RESET);
+        pause_before_exit(Some(&args));
         return;
     }
 
@@ -494,4 +545,6 @@ fn main() {
         &largest_folders,
     );
     println!();
+
+    pause_before_exit(Some(&args));
 }

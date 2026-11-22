@@ -57,6 +57,8 @@ disk-usage-scanner.exe --drives C:\ D:\ --top 10
 | `--quiet` | off | Suppress live progress output |
 | `--threads N` | CPU count | Worker thread pool size |
 | `--min-size BYTES` | `1048576` (1 MB) | Minimum folder size threshold in bytes |
+| `--pause` | on (Windows GUI) | Prompt for Enter before exiting |
+| `--no-pause` | off | Exit immediately without prompt |
 | `-h, --help` | | Show help information |
 
 ## Python Fallback
