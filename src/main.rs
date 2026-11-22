@@ -10,7 +10,7 @@ mod types;
 mod ui;
 mod web_ui;
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 use cli::{enable_ansi_support, parse_args};
@@ -47,6 +47,79 @@ fn main() {
     if args.gui {
         start_gui_server(args);
         return;
+    }
+
+    let raw_args: Vec<String> = std::env::args().collect();
+    let mut args = args;
+    if raw_args.len() == 1 && std::io::stdin().is_terminal() {
+        println!(
+            "================================================================================"
+        );
+        println!("                         DISK USAGE SCANNER");
+        println!(
+            "================================================================================"
+        );
+        println!("Select scan mode:");
+        println!("  [1] Default Scan (Scan main drives with recommended settings)");
+        println!("  [2] Advance Options (Configure custom drives, filters, depth, and junk)");
+        println!("  [3] Open UI Window (Launch standalone dark-mode desktop window)");
+        println!("  [4] Exit");
+        println!(
+            "--------------------------------------------------------------------------------"
+        );
+        print!("Select [1-4] (default: 1) > ");
+        std::io::stdout().flush().ok();
+
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        let choice = input.trim();
+
+        if choice == "2" {
+            print!("Enter drive(s) to scan (comma-separated, default: system drives): ");
+            std::io::stdout().flush().ok();
+            let mut drive_input = String::new();
+            std::io::stdin().read_line(&mut drive_input).ok();
+            let trimmed_d = drive_input.trim();
+            if !trimmed_d.is_empty() {
+                args.drives = trimmed_d
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+
+            print!("Enable duplicate detection (y/N)? ");
+            std::io::stdout().flush().ok();
+            let mut dup_input = String::new();
+            std::io::stdin().read_line(&mut dup_input).ok();
+            if dup_input.trim().eq_ignore_ascii_case("y") {
+                args.find_duplicates = true;
+            }
+
+            print!("Enable junk and cache detection (y/N)? ");
+            std::io::stdout().flush().ok();
+            let mut junk_input = String::new();
+            std::io::stdin().read_line(&mut junk_input).ok();
+            if junk_input.trim().eq_ignore_ascii_case("y") {
+                args.find_junk = true;
+            }
+
+            print!("Show file size histogram (y/N)? ");
+            std::io::stdout().flush().ok();
+            let mut hist_input = String::new();
+            std::io::stdin().read_line(&mut hist_input).ok();
+            if hist_input.trim().eq_ignore_ascii_case("y") {
+                args.size_histogram = true;
+            }
+        } else if choice == "3" {
+            start_gui_server(args);
+            return;
+        } else if choice == "4"
+            || choice.eq_ignore_ascii_case("q")
+            || choice.eq_ignore_ascii_case("exit")
+        {
+            return;
+        }
     }
 
     let colors = Colors::new(!args.no_color && ansi_supported);

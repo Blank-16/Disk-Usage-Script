@@ -11,20 +11,69 @@ use crate::scanner::run_scan;
 use crate::types::{Args, Colors};
 use crate::ui::{bytes_to_readable_size, format_proportion_bar, get_drive_space};
 
-pub fn open_browser(url: &str) {
+pub fn open_app_window(url: &str) {
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", "start", url])
+        let edge_res = std::process::Command::new("msedge")
+            .args([
+                format!("--app={}", url),
+                "--window-size=1100,820".to_string(),
+            ])
             .spawn();
+        if edge_res.is_err() {
+            let chrome_res = std::process::Command::new("chrome")
+                .args([
+                    format!("--app={}", url),
+                    "--window-size=1100,820".to_string(),
+                ])
+                .spawn();
+            if chrome_res.is_err() {
+                let _ = std::process::Command::new("cmd")
+                    .args(["/c", "start", url])
+                    .spawn();
+            }
+        }
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open").arg(url).spawn();
+        let chrome_res = std::process::Command::new(
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        )
+        .args([
+            format!("--app={}", url),
+            "--window-size=1100,820".to_string(),
+        ])
+        .spawn();
+        if chrome_res.is_err() {
+            let _ = std::process::Command::new("open").arg(url).spawn();
+        }
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+        let candidates = [
+            "google-chrome",
+            "chromium",
+            "chromium-browser",
+            "brave-browser",
+            "microsoft-edge",
+        ];
+        let mut launched = false;
+        for bin in candidates {
+            if std::process::Command::new(bin)
+                .args([
+                    format!("--app={}", url),
+                    "--window-size=1100,820".to_string(),
+                ])
+                .spawn()
+                .is_ok()
+            {
+                launched = true;
+                break;
+            }
+        }
+        if !launched {
+            let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+        }
     }
 }
 
@@ -34,7 +83,7 @@ pub fn start_gui_server(default_args: Args) {
         Err(_) => match TcpListener::bind("127.0.0.1:0") {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("Failed to bind local GUI server: {}", e);
+                eprintln!("Failed to bind local UI window server: {}", e);
                 return;
             }
         },
@@ -42,9 +91,9 @@ pub fn start_gui_server(default_args: Args) {
 
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(8765);
     let url = format!("http://127.0.0.1:{}", port);
-    println!("\nStarting minimal UI window at {}", url);
+    println!("\nOpening standalone UI window at {}", url);
     println!("Press Ctrl+C to close.\n");
-    open_browser(&url);
+    open_app_window(&url);
 
     let shared_args = Arc::new(default_args);
 
@@ -395,6 +444,7 @@ fn handle_dedupe_request(body: &str) -> String {
 }
 
 fn get_html_content(default_args: &Args) -> String {
+    let default_drives = default_args.drives.join(", ");
     let initial_drive = default_args
         .drives
         .first()
@@ -421,6 +471,49 @@ fn get_html_content(default_args: &Args) -> String {
     margin-top: 0;
     font-weight: 600;
     letter-spacing: 0.5px;
+  }}
+  .header {{
+    border-bottom: 2px solid #222222;
+    padding-bottom: 12px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }}
+  .header-tag {{
+    color: #888888;
+    font-size: 13px;
+  }}
+  .mode-selector {{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+  }}
+  .mode-card {{
+    background: #080808;
+    border: 1px solid #333333;
+    padding: 20px;
+    cursor: pointer;
+    transition: all 0.15s ease-in-out;
+    text-align: left;
+  }}
+  .mode-card:hover {{
+    border-color: #00ff66;
+    background: #0f180f;
+  }}
+  .mode-card.primary {{
+    border-color: #00ff66;
+  }}
+  .mode-title {{
+    font-size: 16px;
+    font-weight: bold;
+    color: #ffffff;
+    margin-bottom: 6px;
+  }}
+  .mode-desc {{
+    font-size: 13px;
+    color: #888888;
   }}
   .panel {{
     border: 1px solid #222222;
@@ -531,7 +624,7 @@ fn get_html_content(default_args: &Args) -> String {
     border: 1px solid #282828;
   }}
   #status-bar {{
-    padding: 8px 12px;
+    padding: 10px 14px;
     background: #111111;
     border-left: 4px solid #00ff66;
     margin-bottom: 16px;
@@ -541,11 +634,26 @@ fn get_html_content(default_args: &Args) -> String {
 </style>
 </head>
 <body>
-  <h1>[ DISK USAGE SCANNER ]</h1>
-  <div id="status-bar">Ready. Configure scan parameters below and click Run Scan.</div>
+  <div class="header">
+    <h1>[ DISK USAGE SCANNER ]</h1>
+    <div class="header-tag">STANDALONE CONTROLLER</div>
+  </div>
 
-  <div class="panel">
-    <h2>Scan Target & Options</h2>
+  <div id="status-bar">Select Default Scan for instant one-click analysis, or Advance Option to configure parameters.</div>
+
+  <div class="mode-selector">
+    <div class="mode-card primary" onclick="runDefaultScan()">
+      <div class="mode-title">[ 1. DEFAULT SCAN ]</div>
+      <div class="mode-desc">Instantly scan system drives ({}) with recommended settings</div>
+    </div>
+    <div class="mode-card" onclick="toggleAdvancedOptions()">
+      <div class="mode-title">[ 2. ADVANCE OPTION ]</div>
+      <div class="mode-desc">Configure custom drives, filters, depth limits, junk cleaner, and duplicates</div>
+    </div>
+  </div>
+
+  <div class="panel" id="advance-panel" style="display: none;">
+    <h2>Advance Configuration</h2>
     <div class="controls-grid">
       <div>
         <label>Target Drive / Path</label>
@@ -573,9 +681,9 @@ fn get_html_content(default_args: &Args) -> String {
       </label>
     </div>
     <div style="display: flex; gap: 12px;">
-      <button onclick="runScan()">Run Scan</button>
-      <button onclick="quickTarget('.')">Current Dir</button>
-      <button onclick="quickTarget('/')">Root (/)</button>
+      <button onclick="runCustomScan()">Execute Custom Scan</button>
+      <button onclick="quickTarget('.')">Target Current Dir</button>
+      <button onclick="quickTarget('/')">Target Root (/)</button>
     </div>
   </div>
 
@@ -659,6 +767,11 @@ fn get_html_content(default_args: &Args) -> String {
     document.getElementById('target-drives').value = t;
   }}
 
+  function toggleAdvancedOptions() {{
+    const p = document.getElementById('advance-panel');
+    p.style.display = p.style.display === 'none' ? 'block' : 'none';
+  }}
+
   function toggleAllFiles(master) {{
     document.querySelectorAll('.file-chk').forEach(c => c.checked = master.checked);
   }}
@@ -667,19 +780,38 @@ fn get_html_content(default_args: &Args) -> String {
     document.querySelectorAll('.junk-chk').forEach(c => c.checked = master.checked);
   }}
 
-  async function runScan() {{
-    const statusBar = document.getElementById('status-bar');
-    statusBar.innerText = 'Scanning disk... please wait.';
-    statusBar.style.color = '#ffff00';
+  function runDefaultScan() {{
+    document.getElementById('target-drives').value = "{}";
+    document.getElementById('top-n').value = 20;
+    document.getElementById('max-depth').value = "";
+    document.getElementById('filter-pattern').value = "";
+    document.getElementById('chk-dups').checked = true;
+    document.getElementById('chk-junk').checked = true;
+    executeScan({{
+      drives: "{}",
+      top: 20,
+      max_depth: null,
+      filter: "",
+      find_duplicates: true,
+      find_junk: true
+    }});
+  }}
 
-    const payload = {{
+  function runCustomScan() {{
+    executeScan({{
       drives: document.getElementById('target-drives').value,
       top: parseInt(document.getElementById('top-n').value) || 20,
       max_depth: parseInt(document.getElementById('max-depth').value) || null,
       filter: document.getElementById('filter-pattern').value.trim(),
       find_duplicates: document.getElementById('chk-dups').checked,
       find_junk: document.getElementById('chk-junk').checked
-    }};
+    }});
+  }}
+
+  async function executeScan(payload) {{
+    const statusBar = document.getElementById('status-bar');
+    statusBar.innerText = 'Scanning disk in progress... please wait.';
+    statusBar.style.color = '#ffff00';
 
     try {{
       const res = await fetch('/api/scan', {{
@@ -778,7 +910,7 @@ fn get_html_content(default_args: &Args) -> String {
     }});
     const data = await res.json();
     alert(`Deleted ${{data.deleted}} file(s).`);
-    runScan();
+    runDefaultScan();
   }}
 
   async function cleanSelectedJunk() {{
@@ -794,12 +926,12 @@ fn get_html_content(default_args: &Args) -> String {
     }});
     const data = await res.json();
     alert(`Cleaned ${{data.deleted}} junk items, reclaimed ${{data.reclaimed}}.`);
-    runScan();
+    runDefaultScan();
   }}
 </script>
 </body>
 </html>
 "##,
-        initial_drive
+        default_drives, initial_drive, initial_drive, initial_drive
     )
 }
