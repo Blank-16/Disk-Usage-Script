@@ -81,3 +81,30 @@ pub fn find_duplicate_groups(
     }
     duplicate_groups
 }
+
+pub fn deduplicate_with_hardlinks(groups: &[(u64, Vec<PathBuf>)]) -> (usize, u64) {
+    let mut replaced_count = 0;
+    let mut reclaimed_bytes = 0;
+
+    for (wasted, paths) in groups {
+        if paths.len() < 2 {
+            continue;
+        }
+        let original = &paths[0];
+        let single_file_size = *wasted / (paths.len() as u64 - 1);
+
+        for duplicate in paths.iter().skip(1) {
+            let temp_link = duplicate.with_extension("tmp_dedupe_link");
+            if std::fs::hard_link(original, &temp_link).is_ok() {
+                if std::fs::rename(&temp_link, duplicate).is_ok() {
+                    replaced_count += 1;
+                    reclaimed_bytes += single_file_size;
+                } else {
+                    let _ = std::fs::remove_file(&temp_link);
+                }
+            }
+        }
+    }
+
+    (replaced_count, reclaimed_bytes)
+}

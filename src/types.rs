@@ -35,6 +35,7 @@ impl Colors {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Args {
     pub drives: Vec<String>,
     pub top: usize,
@@ -52,4 +53,12 @@ pub struct Args {
     pub max_depth: Option<usize>,
     pub interactive_clean: bool,
     pub no_color: bool,
+    pub snapshot_out: Option<String>,
+    pub diff_snapshot: Option<String>,
+    pub find_junk: bool,
+    pub clean_junk: bool,
+    pub size_histogram: bool,
+    pub filter_pattern: Option<String>,
+    pub dedupe_hardlink: bool,
+    pub gui: bool,
 }

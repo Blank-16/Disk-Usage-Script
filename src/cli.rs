@@ -52,15 +52,25 @@ pub fn print_help() {
     );
     println!("  --max-depth <N>          Maximum folder depth to scan relative to drive root");
     println!("  --older-than <DAYS>      Filter files older than N days in largest files list");
+    println!("  --filter <PATTERN>       Filter files by pattern/extension (e.g. *.iso, *.log)");
     println!("  --find-duplicates        Detect duplicate files and report wasted space");
-    println!("  --interactive-clean      Interactively select and delete large files");
-    println!("  --json <FILE>            Export scan results to a JSON file");
-    println!("  --csv <FILE>             Export scan results to a CSV file");
-    println!("  --html <FILE>            Export an interactive HTML treemap report");
-    println!("  --no-color               Disable ANSI color codes");
-    println!("  --pause                  Prompt for Enter before closing");
-    println!("  --no-pause               Do not prompt for Enter before closing");
-    println!("  -h, --help               Print help information");
+    println!("  --dedupe-hardlink        Replace duplicate files with hard links to reclaim space");
+    println!("  --find-junk              Detect known build artifacts and cache folders");
+    println!("  --clean-junk             Prompt to clean detected junk and build caches");
+    println!("  --size-histogram         Display file count and size distribution histogram");
+    println!("  --snapshot <FILE>        Save current scan snapshot to file");
+    println!("  --diff <FILE>            Compare current scan against earlier snapshot");
+    println!(
+        "  --interactive-clean      Interactively select and delete files from largest files list"
+    );
+    println!("  --gui                    Launch minimal dark-mode monospace UI window in browser");
+    println!("  --json <FILE>            Export scan results to JSON file");
+    println!("  --csv <FILE>             Export scan results to CSV file");
+    println!("  --html <FILE>            Export interactive HTML visual treemap report");
+    println!("  --no-color               Disable ANSI color output");
+    println!("  --pause                  Always wait for Enter key before exiting");
+    println!("  --no-pause               Never wait for Enter key before exiting");
+    println!("  -h, --help               Display this help text\n");
 }
 
 pub fn parse_args() -> Result<Args, String> {
@@ -82,7 +92,15 @@ pub fn parse_args() -> Result<Args, String> {
     let mut find_duplicates = false;
     let mut max_depth = None;
     let mut interactive_clean = false;
-    let mut no_color = std::env::var("NO_COLOR").is_ok();
+    let mut no_color = false;
+    let mut snapshot_out = None;
+    let mut diff_snapshot = None;
+    let mut find_junk = false;
+    let mut clean_junk = false;
+    let mut size_histogram = false;
+    let mut filter_pattern = None;
+    let mut dedupe_hardlink = false;
+    let mut gui = false;
 
     let mut i = 0;
     while i < raw.len() {
@@ -160,11 +178,52 @@ pub fn parse_args() -> Result<Args, String> {
                     return Err("Missing argument for --older-than".to_string());
                 }
             }
+            "--filter" => {
+                i += 1;
+                if i < raw.len() {
+                    filter_pattern = Some(raw[i].clone());
+                } else {
+                    return Err("Missing pattern for --filter".to_string());
+                }
+            }
             "--find-duplicates" => {
                 find_duplicates = true;
             }
+            "--dedupe-hardlink" => {
+                find_duplicates = true;
+                dedupe_hardlink = true;
+            }
+            "--find-junk" => {
+                find_junk = true;
+            }
+            "--clean-junk" => {
+                find_junk = true;
+                clean_junk = true;
+            }
+            "--size-histogram" => {
+                size_histogram = true;
+            }
+            "--snapshot" => {
+                i += 1;
+                if i < raw.len() {
+                    snapshot_out = Some(raw[i].clone());
+                } else {
+                    return Err("Missing filename for --snapshot".to_string());
+                }
+            }
+            "--diff" => {
+                i += 1;
+                if i < raw.len() {
+                    diff_snapshot = Some(raw[i].clone());
+                } else {
+                    return Err("Missing filename for --diff".to_string());
+                }
+            }
             "--interactive-clean" => {
                 interactive_clean = true;
+            }
+            "--gui" => {
+                gui = true;
             }
             "--no-color" => {
                 no_color = true;
@@ -235,5 +294,13 @@ pub fn parse_args() -> Result<Args, String> {
         max_depth,
         interactive_clean,
         no_color,
+        snapshot_out,
+        diff_snapshot,
+        find_junk,
+        clean_junk,
+        size_histogram,
+        filter_pattern,
+        dedupe_hardlink,
+        gui,
     })
 }

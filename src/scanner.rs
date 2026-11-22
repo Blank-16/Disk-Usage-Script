@@ -7,6 +7,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Instant, SystemTime};
 
+use crate::junk::{match_junk_category, JunkItem};
 use crate::types::{Args, Colors};
 use crate::ui::format_number;
 
@@ -26,6 +27,21 @@ fn get_file_unique_id(meta: &std::fs::Metadata) -> Option<(u64, u64)> {
 #[cfg(not(any(unix, windows)))]
 fn get_file_unique_id(_meta: &std::fs::Metadata) -> Option<(u64, u64)> {
     None
+}
+
+pub fn matches_filter(filename: &str, pattern: &str) -> bool {
+    if pattern.is_empty() || pattern == "*" {
+        return true;
+    }
+    let lower_f = filename.to_lowercase();
+    let lower_p = pattern.to_lowercase();
+    if let Some(suffix) = lower_p.strip_prefix('*') {
+        lower_f.ends_with(suffix)
+    } else if let Some(prefix) = lower_p.strip_suffix('*') {
+        lower_f.starts_with(prefix)
+    } else {
+        lower_f.contains(&lower_p)
+    }
 }
 
 pub fn is_path_excluded(path: &Path, exclude_patterns: &[String]) -> bool {
@@ -60,6 +76,7 @@ struct WorkPool {
     shutdown: AtomicBool,
 }
 
+#[derive(Clone, Debug)]
 pub struct ScanResults {
     pub total_scanned: u64,
     pub total_elapsed: f64,
@@ -67,6 +84,8 @@ pub struct ScanResults {
     pub largest_folders: Vec<(u64, PathBuf)>,
     pub top_extensions: Vec<(String, u64, u64)>,
     pub age_distribution: Vec<(String, u64, u64)>,
+    pub size_histogram: Vec<(String, u64, u64)>,
+    pub junk_items: Vec<JunkItem>,
     pub size_candidates: HashMap<u64, Vec<PathBuf>>,
 }
 
@@ -188,6 +207,32 @@ fn merge_age_distributions(all_age_buckets: Vec<[(u64, u64); 5]>) -> Vec<(String
     ]
 }
 
+fn merge_size_histograms(all_histograms: Vec<[(u64, u64); 5]>) -> Vec<(String, u64, u64)> {
+    let mut merged = [(0u64, 0u64); 5];
+    for h in all_histograms {
+        for i in 0..5 {
+            merged[i].0 += h[i].0;
+            merged[i].1 += h[i].1;
+        }
+    }
+
+    vec![
+        ("< 1 KB (tiny)".to_string(), merged[0].0, merged[0].1),
+        ("1 KB - 1 MB (small)".to_string(), merged[1].0, merged[1].1),
+        (
+            "1 MB - 100 MB (medium)".to_string(),
+            merged[2].0,
+            merged[2].1,
+        ),
+        (
+            "100 MB - 1 GB (large)".to_string(),
+            merged[3].0,
+            merged[3].1,
+        ),
+        ("> 1 GB (huge)".to_string(), merged[4].0, merged[4].1),
+    ]
+}
+
 pub fn run_scan(
     args: &Args,
     valid_drives: &[PathBuf],
@@ -203,6 +248,8 @@ pub fn run_scan(
     let mut all_dir_sizes: HashMap<PathBuf, u64> = HashMap::new();
     let mut all_ext_maps = Vec::new();
     let mut all_age_buckets = Vec::new();
+    let mut all_size_histograms = Vec::new();
+    let mut all_junk_items = Vec::new();
     let mut size_candidates: HashMap<u64, Vec<PathBuf>> = HashMap::new();
 
     for drive_path in valid_drives {
@@ -272,6 +319,8 @@ pub fn run_scan(
             let max_depth = args.max_depth;
             let older_than_days = args.older_than_days;
             let find_duplicates = args.find_duplicates;
+            let find_junk = args.find_junk || args.clean_junk;
+            let filter_pattern = args.filter_pattern.clone();
 
             handles.push(thread::spawn(move || {
                 let mut local_files: BinaryHeap<Reverse<(u64, PathBuf)>> =
@@ -279,6 +328,8 @@ pub fn run_scan(
                 let mut local_dir_sizes: HashMap<PathBuf, u64> = HashMap::new();
                 let mut local_ext_sizes: HashMap<String, (u64, u64)> = HashMap::new();
                 let mut local_age: [(u64, u64); 5] = [(0, 0); 5];
+                let mut local_hist: [(u64, u64); 5] = [(0, 0); 5];
+                let mut local_junk: Vec<JunkItem> = Vec::new();
                 let mut local_size_candidates: HashMap<u64, Vec<PathBuf>> = HashMap::new();
 
                 loop {
@@ -291,6 +342,8 @@ pub fn run_scan(
                                     local_dir_sizes,
                                     local_ext_sizes,
                                     local_age,
+                                    local_hist,
+                                    local_junk,
                                     local_size_candidates,
                                 );
                             }
@@ -306,6 +359,8 @@ pub fn run_scan(
                                     local_dir_sizes,
                                     local_ext_sizes,
                                     local_age,
+                                    local_hist,
+                                    local_junk,
                                     local_size_candidates,
                                 );
                             }
@@ -324,11 +379,25 @@ pub fn run_scan(
                                 local_dir_sizes,
                                 local_ext_sizes,
                                 local_age,
+                                local_hist,
+                                local_junk,
                                 local_size_candidates,
                             );
                         } else {
                             pool.cv.notify_all();
                             continue;
+                        }
+                    }
+
+                    if find_junk {
+                        if let Some(dir_name) = current_dir.file_name().and_then(|n| n.to_str()) {
+                            if let Some(cat) = match_junk_category(dir_name) {
+                                local_junk.push(JunkItem {
+                                    path: current_dir.clone(),
+                                    category: cat,
+                                    bytes: 0,
+                                });
+                            }
                         }
                     }
 
@@ -359,6 +428,14 @@ pub fn run_scan(
                                     new_subdirs.push(path);
                                 }
                             } else if file_type.is_file() {
+                                let file_name_str =
+                                    path.file_name().unwrap_or_default().to_string_lossy();
+                                if let Some(ref pattern) = filter_pattern {
+                                    if !matches_filter(&file_name_str, pattern) {
+                                        continue;
+                                    }
+                                }
+
                                 let meta = match entry.metadata() {
                                     Ok(m) => m,
                                     Err(_) => continue,
@@ -378,6 +455,20 @@ pub fn run_scan(
 
                                 dir_file_size += len;
                                 total_files.fetch_add(1, Ordering::Relaxed);
+
+                                let hist_idx = if len < 1024 {
+                                    0
+                                } else if len < 1024 * 1024 {
+                                    1
+                                } else if len < 100 * 1024 * 1024 {
+                                    2
+                                } else if len < 1024 * 1024 * 1024 {
+                                    3
+                                } else {
+                                    4
+                                };
+                                local_hist[hist_idx].0 += len;
+                                local_hist[hist_idx].1 += 1;
 
                                 let age_days = meta
                                     .modified()
@@ -455,6 +546,8 @@ pub fn run_scan(
                                 local_dir_sizes,
                                 local_ext_sizes,
                                 local_age,
+                                local_hist,
+                                local_junk,
                                 local_size_candidates,
                             );
                         } else {
@@ -466,13 +559,16 @@ pub fn run_scan(
         }
 
         for h in handles {
-            let (files, dir_sizes, ext_sizes, age_buckets, size_cands) = h.join().unwrap();
+            let (files, dir_sizes, ext_sizes, age_buckets, hist_buckets, junk_entries, size_cands) =
+                h.join().unwrap();
             all_file_heaps.push(files);
             for (p, s) in dir_sizes {
                 *all_dir_sizes.entry(p).or_insert(0) += s;
             }
             all_ext_maps.push(ext_sizes);
             all_age_buckets.push(age_buckets);
+            all_size_histograms.push(hist_buckets);
+            all_junk_items.extend(junk_entries);
 
             for (sz, paths) in size_cands {
                 size_candidates.entry(sz).or_default().extend(paths);
@@ -502,6 +598,17 @@ pub fn run_scan(
         compute_largest_folders(all_dir_sizes, valid_drives, args.top, args.min_folder_size);
     let top_extensions = merge_extension_stats(all_ext_maps, args.top.min(10));
     let age_distribution = merge_age_distributions(all_age_buckets);
+    let size_histogram = merge_size_histograms(all_size_histograms);
+
+    for junk in &mut all_junk_items {
+        if let Some(&size) = largest_folders
+            .iter()
+            .find(|(_, p)| p == &junk.path)
+            .map(|(s, _)| s)
+        {
+            junk.bytes = size;
+        }
+    }
 
     ScanResults {
         total_scanned,
@@ -510,6 +617,8 @@ pub fn run_scan(
         largest_folders,
         top_extensions,
         age_distribution,
+        size_histogram,
+        junk_items: all_junk_items,
         size_candidates,
     }
 }

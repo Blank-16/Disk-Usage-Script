@@ -1,6 +1,9 @@
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
+use crate::diff::DiffItem;
+use crate::duplicates::deduplicate_with_hardlinks;
+use crate::junk::{clean_junk_items, JunkItem};
 use crate::types::{Args, Colors, SEPARATOR_WIDTH};
 
 #[cfg(unix)]
@@ -235,6 +238,91 @@ pub fn print_age_distribution_table(colors: &Colors, rows: &[(String, u64, u64)]
     }
 }
 
+pub fn print_size_histogram(colors: &Colors, rows: &[(String, u64, u64)]) {
+    let separator = "=".repeat(SEPARATOR_WIDTH);
+    println!("\n{}{}{}", colors.yellow, separator, colors.reset);
+    println!(
+        "{}{: <12}{} | {: <12} | {: <12} | {}FILE SIZE DISTRIBUTION HISTOGRAM{}",
+        colors.green, "SIZE", colors.reset, "PROPORTION", "FILES", colors.yellow, colors.reset
+    );
+    println!("{}{}{}", colors.yellow, separator, colors.reset);
+    let max_bytes = rows.iter().map(|r| r.1).max().unwrap_or(1);
+    for (bucket, bytes, count) in rows {
+        let size_str = bytes_to_readable_size(*bytes);
+        let bar = format_proportion_bar(*bytes, max_bytes);
+        let count_str = format_number(*count);
+        println!(
+            "{}{: <12}{} | {: <12} | {: <12} | {}",
+            colors.green, size_str, colors.reset, bar, count_str, bucket
+        );
+    }
+}
+
+pub fn print_junk_table(colors: &Colors, items: &[JunkItem]) {
+    let separator = "=".repeat(SEPARATOR_WIDTH);
+    println!("\n{}{}{}", colors.yellow, separator, colors.reset);
+    println!(
+        "{}{: <12}{} | {: <24} | {}DETECTED JUNK & CACHES{}",
+        colors.green, "SIZE", colors.reset, "CATEGORY", colors.yellow, colors.reset
+    );
+    println!("{}{}{}", colors.yellow, separator, colors.reset);
+    if items.is_empty() {
+        println!("  (No build artifacts or cache folders detected)");
+    } else {
+        for (i, item) in items.iter().enumerate() {
+            let size_str = if item.bytes > 0 {
+                bytes_to_readable_size(item.bytes)
+            } else {
+                "-".to_string()
+            };
+            println!(
+                "{}{: <12}{} | {: <24} | [{}] {}",
+                colors.green,
+                size_str,
+                colors.reset,
+                item.category,
+                i + 1,
+                item.path.display()
+            );
+        }
+    }
+}
+
+pub fn print_diff_table(colors: &Colors, diffs: &[DiffItem]) {
+    let separator = "=".repeat(SEPARATOR_WIDTH);
+    println!("\n{}{}{}", colors.yellow, separator, colors.reset);
+    println!(
+        "{}{: <14}{} | {: <12} | {: <12} | {}GROWTH DIFF VS SNAPSHOT{}",
+        colors.green, "DELTA", colors.reset, "CURRENT", "PREVIOUS", colors.yellow, colors.reset
+    );
+    println!("{}{}{}", colors.yellow, separator, colors.reset);
+    if diffs.is_empty() {
+        println!("  (No size changes detected)");
+    } else {
+        for item in diffs.iter().take(20) {
+            let sign = if item.delta >= 0 { "+" } else { "-" };
+            let abs_delta = bytes_to_readable_size(item.delta.unsigned_abs());
+            let delta_str = format!("{}{}", sign, abs_delta);
+            let cur_str = bytes_to_readable_size(item.new_size);
+            let prev_str = bytes_to_readable_size(item.old_size);
+            let color = if item.delta > 0 {
+                colors.red
+            } else {
+                colors.green
+            };
+            println!(
+                "{}{: <14}{} | {: <12} | {: <12} | {}",
+                color,
+                delta_str,
+                colors.reset,
+                cur_str,
+                prev_str,
+                item.path.display()
+            );
+        }
+    }
+}
+
 pub fn print_duplicates_table(colors: &Colors, rows: &[(u64, Vec<PathBuf>)]) {
     let separator = "=".repeat(SEPARATOR_WIDTH);
     println!("\n{}{}{}", colors.yellow, separator, colors.reset);
@@ -325,6 +413,57 @@ pub fn handle_interactive_clean(largest_files: &[(u64, PathBuf)]) {
             }
         } else {
             println!("Invalid input. Enter a number or press Enter to exit.");
+        }
+    }
+}
+
+pub fn handle_junk_cleanup(items: &[JunkItem]) {
+    if items.is_empty() {
+        return;
+    }
+
+    print!(
+        "\nFound {} junk/cache item(s). Clean all detected items (y/N)? ",
+        items.len()
+    );
+    io::stdout().flush().ok();
+
+    let mut confirm = String::new();
+    if io::stdin().read_line(&mut confirm).is_ok() {
+        let c = confirm.trim();
+        if c.eq_ignore_ascii_case("y") || c.eq_ignore_ascii_case("yes") {
+            let (deleted, reclaimed) = clean_junk_items(items);
+            println!(
+                "Cleaned {} item(s), reclaimed {}.",
+                deleted,
+                bytes_to_readable_size(reclaimed)
+            );
+        } else {
+            println!("Junk cleanup cancelled.");
+        }
+    }
+}
+
+pub fn handle_hardlink_deduplication(groups: &[(u64, Vec<PathBuf>)]) {
+    if groups.is_empty() {
+        return;
+    }
+
+    print!("\nReplace duplicate file copies with filesystem hard links (y/N)? ");
+    io::stdout().flush().ok();
+
+    let mut confirm = String::new();
+    if io::stdin().read_line(&mut confirm).is_ok() {
+        let c = confirm.trim();
+        if c.eq_ignore_ascii_case("y") || c.eq_ignore_ascii_case("yes") {
+            let (replaced, reclaimed) = deduplicate_with_hardlinks(groups);
+            println!(
+                "Replaced {} duplicate file(s) with hard links, saving {}.",
+                replaced,
+                bytes_to_readable_size(reclaimed)
+            );
+        } else {
+            println!("Deduplication cancelled.");
         }
     }
 }
