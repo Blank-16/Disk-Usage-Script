@@ -60,8 +60,16 @@ disk-usage-scanner.exe --drives C:\ D:\ --top 10
 | `--exclude PATTERN [PATTERN ...]` | none | Folder names or patterns to skip (e.g. node_modules target) |
 | `--max-depth N` | none | Maximum folder depth to scan relative to drive root |
 | `--older-than DAYS` | none | Filter files older than N days in largest files list |
+| `--filter PATTERN` | none | Filter files by pattern/extension (e.g. *.iso, *.log) |
 | `--find-duplicates` | off | Detect duplicate files and report wasted space |
+| `--dedupe-hardlink` | off | Replace duplicate files with hard links to reclaim space |
+| `--find-junk` | off | Detect known build artifacts and cache folders |
+| `--clean-junk` | off | Interactively prompt to clean detected junk and build caches |
+| `--size-histogram` | off | Display file size distribution histogram |
+| `--snapshot FILE` | none | Save current scan snapshot to file |
+| `--diff FILE` | none | Compare current scan against an earlier snapshot |
 | `--interactive-clean` | off | Interactively select and delete large files |
+| `--gui` | off | Launch minimal dark-mode monospace UI window in browser |
 | `--json FILE` | none | Export scan results to a JSON file |
 | `--csv FILE` | none | Export scan results to a CSV file |
 | `--html FILE` | none | Export an interactive HTML treemap report |
