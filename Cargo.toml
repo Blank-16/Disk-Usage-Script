@@ -1,6 +1,6 @@
 [package]
 name = "disk-usage-scanner"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 authors = ["Blank-16"]
 description = "High-performance multi-threaded disk usage scanner for Unix and Windows"
